@@ -218,6 +218,148 @@ def update_secret(secret_id: str, new_value: str, project: str):
 
 ---
 
+## BigQuery 테이블 생성 + MERGE (Upsert) 패턴
+
+배치 자동화의 핵심은 "수집한 데이터를 DB에 적재"하는 것입니다.
+BigQuery에서는 MERGE 문으로 INSERT + UPDATE를 한 번에 처리합니다.
+
+### 테이블 생성 (코드에서 자동)
+
+```python
+from google.cloud import bigquery
+
+def ensure_table(project: str, dataset: str, table: str, schema: list[bigquery.SchemaField]):
+    """테이블이 없으면 생성, 있으면 스킵."""
+    client = bigquery.Client(project=project)
+    table_ref = f"{project}.{dataset}.{table}"
+
+    try:
+        client.get_table(table_ref)
+    except Exception:
+        table_obj = bigquery.Table(table_ref, schema=schema)
+        client.create_table(table_obj)
+
+# 사용 예시
+ensure_table("my-project", "my_dataset", "exchange_rates", [
+    bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
+    bigquery.SchemaField("currency", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("rate", "FLOAT64"),
+    bigquery.SchemaField("updated_at", "TIMESTAMP"),
+])
+```
+
+### MERGE (Upsert) — 있으면 UPDATE, 없으면 INSERT
+
+BigQuery에 데이터를 적재할 때, 단순 INSERT는 중복이 생깁니다.
+MERGE 문을 사용하면 **키가 일치하면 UPDATE, 없으면 INSERT**를 원자적으로 처리합니다.
+
+```python
+from google.cloud import bigquery
+
+def upsert_to_bigquery(
+    project: str,
+    dataset: str,
+    table: str,
+    rows: list[dict],
+    key_columns: list[str],      # MERGE 키 (예: ["date", "currency"])
+    update_columns: list[str],   # UPDATE 할 컬럼 (예: ["rate", "updated_at"])
+):
+    """
+    BigQuery MERGE를 사용한 Upsert.
+
+    1. 임시 테이블에 신규 데이터 로드
+    2. MERGE 문으로 대상 테이블에 upsert
+    3. 임시 테이블 삭제
+    """
+    client = bigquery.Client(project=project)
+    target = f"`{project}.{dataset}.{table}`"
+    staging = f"`{project}.{dataset}._staging_{table}`"
+
+    # 1. 스테이징 테이블에 로드
+    staging_ref = f"{project}.{dataset}._staging_{table}"
+    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+    client.load_table_from_json(rows, staging_ref, job_config=job_config).result()
+
+    # 2. MERGE
+    on_clause = " AND ".join(f"T.{k} = S.{k}" for k in key_columns)
+    update_set = ", ".join(f"T.{c} = S.{c}" for c in update_columns)
+    all_columns = list(rows[0].keys())
+    insert_cols = ", ".join(all_columns)
+    insert_vals = ", ".join(f"S.{c}" for c in all_columns)
+
+    merge_sql = f"""
+    MERGE {target} T
+    USING {staging} S
+    ON {on_clause}
+    WHEN MATCHED THEN
+        UPDATE SET {update_set}
+    WHEN NOT MATCHED THEN
+        INSERT ({insert_cols})
+        VALUES ({insert_vals})
+    """
+    client.query(merge_sql).result()
+
+    # 3. 스테이징 삭제
+    client.delete_table(staging_ref, not_found_ok=True)
+
+    return {"merged": len(rows)}
+```
+
+### 사용 예시: 환율 수집 배치
+
+```python
+import requests
+from datetime import datetime, timezone
+
+class ExchangeRateCollector:
+    async def run(self):
+        # 1. API에서 데이터 수집
+        resp = requests.get("https://api.exchangerate.host/latest?base=USD")
+        rates = resp.json()["rates"]
+        now = datetime.now(timezone.utc).isoformat()
+
+        # 2. BigQuery용 행 데이터 구성
+        rows = [
+            {"date": "2026-02-23", "currency": k, "rate": v, "updated_at": now}
+            for k, v in rates.items()
+            if k in ["KRW", "JPY", "EUR", "CNY"]
+        ]
+
+        # 3. MERGE upsert
+        result = upsert_to_bigquery(
+            project="my-project",
+            dataset="my_dataset",
+            table="exchange_rates",
+            rows=rows,
+            key_columns=["date", "currency"],        # 날짜+통화 조합이 유니크
+            update_columns=["rate", "updated_at"],   # 이미 있으면 갱신
+        )
+
+        return {"collected": len(rows), **result}
+```
+
+### 대량 데이터 적재 시 팁
+
+- **청크 처리**: 10,000행 이상이면 2,000행씩 나눠서 MERGE
+- **NaN 처리**: Python float NaN은 BigQuery에서 에러. `None`으로 변환 필수
+- **date 타입**: `datetime.date` 객체는 `str(date)` ("YYYY-MM-DD")로 변환
+- **중복 제거**: 스테이징 테이블에서 ROW_NUMBER()로 중복 제거 후 MERGE
+
+```python
+# NaN → None 변환 헬퍼
+import math
+
+def clean_row(row: dict) -> dict:
+    return {
+        k: (None if isinstance(v, float) and math.isnan(v) else v)
+        for k, v in row.items()
+    }
+
+rows = [clean_row(r) for r in raw_rows]
+```
+
+---
+
 ## 트러블슈팅
 
 ### 504 Gateway Timeout

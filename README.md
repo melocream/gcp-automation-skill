@@ -464,6 +464,65 @@ bash scripts/create_scheduler.sh \
 
 ---
 
+## BigQuery 데이터 적재 패턴
+
+자동화의 핵심 = **수집 → 저장**. BigQuery에 데이터를 적재할 때 가장 흔한 문제는 **중복**입니다.
+매일 09시에 환율을 수집하는 배치가 있다면, 같은 날 두 번 돌았을 때 데이터가 2줄이 되면 안 됩니다.
+
+### MERGE (Upsert) — 있으면 UPDATE, 없으면 INSERT
+
+```python
+from bigquery_helper import upsert
+
+# 환율 데이터 예시
+rows = [
+    {"date": "2026-02-23", "currency": "KRW", "rate": 1350.5, "updated_at": "..."},
+    {"date": "2026-02-23", "currency": "JPY", "rate": 149.2, "updated_at": "..."},
+]
+
+# date + currency 조합이 이미 있으면 rate만 UPDATE, 없으면 INSERT
+upsert(
+    project="my-project",
+    dataset="my_dataset",
+    table="exchange_rates",
+    rows=rows,
+    key_columns=["date", "currency"],        # 유니크 키
+    update_columns=["rate", "updated_at"],   # 갱신 대상
+)
+```
+
+내부적으로:
+1. 임시 스테이징 테이블에 데이터 로드
+2. `MERGE ... WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT`
+3. 스테이징 테이블 삭제
+
+이렇게 하면 같은 배치를 10번 돌려도 데이터는 정확히 1줄만 남습니다.
+
+### 테이블 자동 생성
+
+```python
+from bigquery_helper import ensure_table
+
+# 코드에서 테이블 스키마 정의 — Console 들어갈 필요 없음
+ensure_table("my-project", "my_dataset", "exchange_rates", [
+    {"name": "date", "type": "DATE", "mode": "REQUIRED"},
+    {"name": "currency", "type": "STRING", "mode": "REQUIRED"},
+    {"name": "rate", "type": "FLOAT64"},
+    {"name": "updated_at", "type": "TIMESTAMP"},
+])
+```
+
+### 대량 데이터 팁
+
+- **2,000행씩 청크**: `upsert()`가 자동으로 분할 처리
+- **NaN → None**: Python `float('nan')`은 BigQuery에서 에러. 헬퍼가 자동 변환
+- **date 타입**: `datetime.date` → `"YYYY-MM-DD"` 문자열로 자동 변환
+- **단순 로그**: 중복이 상관없는 로그/이벤트 데이터는 `simple_insert()` 사용
+
+`templates/bigquery_helper.py`에 `ensure_table()`, `upsert()`, `simple_insert()`, `run_query()` 전부 있습니다.
+
+---
+
 ## 폴더 구조
 
 ```
@@ -475,6 +534,7 @@ gcp-automation-skill/
 │   ├── batch_endpoint.py              # Flask 엔드포인트 보일러플레이트
 │   ├── batch_job_async.py             # async 배치 잡 템플릿
 │   ├── batch_job_sync.py              # sync 배치 잡 템플릿
+│   ├── bigquery_helper.py             # BigQuery 테이블 생성 + MERGE upsert
 │   ├── secret_manager_helper.py       # Secret Manager 유틸리티
 │   └── Dockerfile                     # Cloud Run용 Dockerfile
 └── scripts/
