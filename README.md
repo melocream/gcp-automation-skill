@@ -110,15 +110,15 @@ resource "google_cloud_scheduler_job" "my_job" {
 
 ---
 
-## 우리는 어떻게 하나요? — Code-First 자동화
+## Code-First 자동화 — 이 스킬의 접근법
 
-위의 모든 방법에서 공통적으로 불편한 점이 있습니다:
+위 방법들의 공통 불편함:
 - **UI 의존** (Console 클릭, 비주얼 에디터)
 - **코드 관리 안 됨** (git 없음, 히스토리 없음)
 - **테스트 어려움** (로컬에서 실행해볼 수 없음)
 - **확장 한계** (작업이 늘어나면 관리 불가능)
 
-우리 방식은 이 모든 걸 **코드 한 곳**에서 해결합니다.
+이 스킬은 **코드 한 곳**에서 전부 해결합니다.
 
 ### 핵심 아이디어
 
@@ -138,7 +138,7 @@ resource "google_cloud_scheduler_job" "my_job" {
 │  def collect_data():         @app.route('/run-collect')         │
 │      api 호출                def run_collect():                 │
 │      데이터 가공                  result = collect_data()       │
-│      BigQuery 저장                return jsonify(result)        │
+│      DB 저장                     return jsonify(result)         │
 │                                                                 │
 │  ③ Docker + Cloud Run 배포   ④ Cloud Scheduler 등록             │
 │                                                                 │
@@ -154,80 +154,123 @@ resource "google_cloud_scheduler_job" "my_job" {
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 일반적인 방법 vs 우리 방법 비교
+### Console UI vs Code-First 비교
 
-같은 작업을 구현한다고 가정합니다: **"매일 아침 9시에 주가 데이터를 수집해서 BigQuery에 저장"**
-
-| 단계 | Console UI 방식 | Code-First 방식 (우리) |
-|------|----------------|----------------------|
-| 코드 작성 | GCP Console 브라우저 에디터 | **로컬 VS Code / Cursor** (자동완성, 린팅) |
-| 테스트 | 배포 후에야 테스트 가능 | **로컬에서 바로 실행** (`python my_job.py --dry-run`) |
+| 단계 | Console UI 방식 | Code-First 방식 |
+|------|----------------|----------------|
+| 코드 작성 | GCP Console 브라우저 에디터 | **로컬 IDE** (자동완성, 린팅) |
+| 테스트 | 배포 후에야 확인 가능 | **로컬에서 바로 실행** (`--dry-run`) |
 | 배포 | Console에서 버튼 클릭 | **터미널 한 줄** (`bash deploy.sh`) |
-| 스케줄 등록 | Console → Scheduler → 폼 입력 | **터미널 한 줄** (`bash create_scheduler.sh ...`) |
-| 코드 수정 | Console 에디터 열기 → 수정 → 재배포 | **파일 수정 → git commit → deploy.sh** |
-| 코드 관리 | Console 안에만 존재 | **git 버전관리** (히스토리, 브랜치, PR) |
-| 비밀 관리 | Console → 환경변수 직접 입력 | **Secret Manager** (코드로 관리) |
-| 작업 10개 관리 | 10개 함수 각각 Console에서 관리 | **batch_endpoint.py 1개 파일**에 10개 라우트 |
-| 협업 | 공유 어려움 | **git push → 누구나 동일 환경** |
+| 스케줄 등록 | Console → Scheduler → 폼 입력 | **터미널 한 줄** (`bash create_scheduler.sh`) |
+| 코드 수정 | Console 다시 열기 → 재배포 | **파일 수정 → git commit → deploy** |
+| 코드 관리 | Console 안에만 존재 | **git 버전관리** |
+| 작업 10개 관리 | 10개 서비스 각각 Console에서 | **1개 파일**에 10개 라우트 |
 | AI 활용 | 불가능 | **Claude Code가 코드 자동 생성** |
 
 ### Claude Code가 바꾸는 것
 
-전통적인 Code-First 방식도 있었습니다 — Terraform, Pulumi, serverless framework 등.
-하지만 이런 도구들은 **학습 곡선이 높고 설정이 복잡해서** 결국 Console UI로 돌아가는 사람이 많았습니다.
-
-**Claude Code가 이 문제를 해결합니다:**
+전통적인 Code-First 도구(Terraform, Pulumi, serverless framework)는 **학습 곡선이 높아서** 결국 Console UI로 돌아가는 사람이 많았습니다.
 
 ```
-이전: "코드로 자동화하고 싶지만 Flask, Docker, gcloud 명령어 다 배워야 하니까
+이전: "코드로 자동화하고 싶지만 Flask, Docker, gcloud 다 배워야 하니까
       그냥 Console에서 클릭하자..."
 
 지금: "Claude Code야, 매일 9시에 환율 수집해줘"
-      → Claude Code가 함수 + 엔드포인트 + Dockerfile + 배포 명령어 전부 생성
+      → 함수 + 엔드포인트 + Dockerfile + 배포 명령어 전부 자동 생성
       → 사용자는 결과만 확인
 ```
 
-코드 작성의 진입 장벽이 사실상 0이 되면서, Console UI의 유일한 장점(쉬움)이 사라집니다.
+코드 작성의 진입 장벽이 0이 되면서, Console UI의 유일한 장점(쉬움)이 사라집니다.
 
 ---
 
-## 실전 예시: 16개 자동화를 1개 파일로
+## 이런 자동화를 만들 수 있습니다
 
-이 스킬을 사용해서 실제로 운영 중인 StockAI Platform의 자동화 목록입니다.
-**batch_endpoint.py 파일 1개** 안에 16개 라우트가 들어있고, 각각 Cloud Scheduler가 트리거합니다.
+이 스킬 하나로 만들 수 있는 자동화 예시입니다.
+모두 **같은 패턴** (Python 함수 → Flask 라우트 → Cloud Run → Scheduler)으로 구현됩니다.
+
+### 데이터 수집
 
 ```python
-# batch_endpoint.py — 실제 운영 코드 구조
-
-@app.route('/run-news-ingest')         # 30분마다: RSS 뉴스 수집
-@app.route('/run-ai-analyze')          # 30분마다: Gemini AI 감정분석
-@app.route('/run-signal-generate')     # 매시간: ML 매매 시그널 생성
-@app.route('/run-signal-generate-us')  # 매일 08:00: US 시그널 생성
-@app.route('/run-prices-increment-kr') # 매일 06:20: 한국 주가 수집
-@app.route('/run-prices-increment-us') # 매일 06:30: 미국 주가 수집
-@app.route('/run-technical-increment') # 매일 06:40: 기술지표 계산
-@app.route('/run-fundamental-refresh') # 매주 월요일: 재무 데이터
-@app.route('/run-dedap-refresh')       # 4시간마다: 공포탐욕 지표
-@app.route('/run-signal-evaluate')     # 매일 07:00: 시그널 성과 평가
-@app.route('/run-supply-demand')       # 매일 16:00: 수급 데이터
-@app.route('/run-telegram-briefing')   # 하루 4회: 텔레그램 뉴스 브리핑
-@app.route('/run-twitter-curation')    # 하루 3회: X 큐레이션
-@app.route('/run-threads-generate')    # 매일 20:00: Threads 드래프트 생성
-@app.route('/run-threads-publish')     # 매일 21:00: Threads 발행
-@app.route('/run-threads-token-refresh') # 매월 1,15일: 토큰 자동 갱신
+# 예시: 환율 수집 (매일 09:00)
+@app.route('/run-exchange-rate')     # "0 9 * * *"
+# 예시: 날씨 데이터 수집 (매시간)
+@app.route('/run-weather-collect')   # "0 * * * *"
+# 예시: RSS/뉴스 크롤링 (30분마다)
+@app.route('/run-news-ingest')       # "*/30 * * * *"
+# 예시: 소셜미디어 멘션 수집 (1시간마다)
+@app.route('/run-social-mentions')   # "0 * * * *"
+# 예시: 경쟁사 가격 모니터링 (평일 10시, 14시)
+@app.route('/run-competitor-prices') # "0 10,14 * * 1-5"
 ```
 
-이걸 Console UI로 관리한다면?
-- Cloud Functions 16개를 각각 브라우저에서 관리
-- 코드 수정할 때마다 16번 Console 에디터 열기
-- 환경 변수 16번 각각 설정
-- 에러 발생하면 16개 로그를 각각 확인
+### AI 분석 & 생성
 
-Code-First로 관리하면?
-- **파일 1개** (batch_endpoint.py)에 16개 라우트
-- **배포 1번** (`bash deploy.sh`)이면 16개 전부 업데이트
-- **git log**로 모든 변경 이력 추적
-- **1개 터미널**에서 모든 로그 확인 (`bash logs.sh`)
+```python
+# 예시: 수집된 뉴스 감정분석 (1시간마다)
+@app.route('/run-sentiment-analysis')  # "0 * * * *"
+# 예시: 블로그 포스트 자동 생성 (매일 18:00)
+@app.route('/run-blog-generate')       # "0 18 * * *"
+# 예시: 이미지 썸네일 자동 생성 (매시간)
+@app.route('/run-thumbnail-generate')  # "0 * * * *"
+# 예시: 고객 리뷰 요약 리포트 (매주 월요일)
+@app.route('/run-review-summary')      # "0 9 * * 1"
+```
+
+### 알림 & 리포트
+
+```python
+# 예시: 텔레그램/Slack 일일 리포트 (매일 08:00)
+@app.route('/run-daily-report')      # "0 8 * * *"
+# 예시: 이메일 뉴스레터 발송 (매주 수요일)
+@app.route('/run-newsletter')        # "0 10 * * 3"
+# 예시: 서버 상태 체크 + 장애 알림 (5분마다)
+@app.route('/run-health-check')      # "*/5 * * * *"
+# 예시: 매출 일보 Slack 알림 (평일 09:00)
+@app.route('/run-sales-alert')       # "0 9 * * 1-5"
+```
+
+### 콘텐츠 발행
+
+```python
+# 예시: SNS 자동 포스팅 — Threads/X/인스타 (매일 12:00, 18:00)
+@app.route('/run-social-publish')    # "0 12,18 * * *"
+# 예시: YouTube 커뮤니티 글 자동 게시 (매일 20:00)
+@app.route('/run-youtube-community') # "0 20 * * *"
+# 예시: 자동 번역 + 다국어 블로그 발행 (매일 22:00)
+@app.route('/run-translate-publish') # "0 22 * * *"
+```
+
+### 데이터 관리 & 유지보수
+
+```python
+# 예시: DB 백업 (매일 새벽 03:00)
+@app.route('/run-db-backup')           # "0 3 * * *"
+# 예시: 30일 지난 데이터 정리 (매주 일요일)
+@app.route('/run-data-cleanup')        # "0 4 * * 0"
+# 예시: OAuth 토큰 자동 갱신 (매월 1일, 15일)
+@app.route('/run-token-refresh')       # "0 0 1,15 * *"
+# 예시: BigQuery 테이블 파티션 정리 (매월 1일)
+@app.route('/run-partition-cleanup')   # "0 5 1 * *"
+# 예시: 외부 API 사용량 체크 (매일 23:00)
+@app.route('/run-api-usage-check')     # "0 23 * * *"
+```
+
+### 커머스 & 비즈니스
+
+```python
+# 예시: 쇼핑몰 재고 동기화 (4시간마다)
+@app.route('/run-inventory-sync')    # "0 */4 * * *"
+# 예시: 정산 데이터 집계 (매일 새벽 02:00)
+@app.route('/run-settlement')        # "0 2 * * *"
+# 예시: 쿠폰 만료 처리 (매일 00:00)
+@app.route('/run-coupon-expire')     # "0 0 * * *"
+# 예시: 배송 상태 추적 + 고객 알림 (2시간마다)
+@app.route('/run-shipping-track')    # "0 */2 * * *"
+```
+
+**핵심: 위 예시 전부 같은 패턴입니다.** Python 함수 하나 + Flask 라우트 하나 + Scheduler cron 하나.
+10개든 30개든 `batch_endpoint.py` **파일 1개**에 라우트만 추가하면 됩니다.
 
 ---
 
@@ -240,7 +283,7 @@ Code-First로 관리하면?
 │  ┌─────────────────┐                                             │
 │  │ Cloud Scheduler  │  cron: "0 9 * * 1-5"                       │
 │  │                  │  cron: "*/30 * * * *"                       │
-│  │  (잡 16개 등록)   │  cron: "0 */4 * * *"                       │
+│  │  (잡 N개 등록)    │  cron: "0 */4 * * *"                       │
 │  └────────┬────────┘  ...                                        │
 │           │ HTTP POST (OIDC 인증)                                 │
 │           ▼                                                      │
@@ -248,11 +291,11 @@ Code-First로 관리하면?
 │  │           Cloud Run (Flask)               │                    │
 │  │                                          │                    │
 │  │  batch_endpoint.py                       │                    │
-│  │  ├── /run-news-ingest     → NewsIngest   │                    │
-│  │  ├── /run-ai-analyze      → AIAnalyze    │                    │
-│  │  ├── /run-prices-kr       → PricesKR     │                    │
-│  │  ├── /run-signal-generate → SignalGen    │                    │
-│  │  └── ... (16개 라우트)                    │                    │
+│  │  ├── /run-data-collect                   │                    │
+│  │  ├── /run-ai-analyze                     │                    │
+│  │  ├── /run-daily-report                   │                    │
+│  │  ├── /run-social-publish                 │                    │
+│  │  └── ... (라우트 N개)                     │                    │
 │  │                                          │                    │
 │  │  [서버리스: 요청 올 때만 실행, 자동 스케일] │                    │
 │  └──────┬──────────┬──────────┬─────────────┘                    │
@@ -260,16 +303,16 @@ Code-First로 관리하면?
 │         ▼          ▼          ▼                                   │
 │  ┌──────────┐ ┌─────────┐ ┌───────────┐                         │
 │  │ BigQuery  │ │ Secret  │ │ 외부 API   │                         │
-│  │ (데이터)  │ │ Manager │ │ (Naver,   │                         │
-│  │          │ │ (비밀값) │ │  AV, RSS) │                         │
+│  │ Firestore │ │ Manager │ │ Gemini    │                         │
+│  │ Cloud SQL │ │ (비밀값) │ │ Slack 등  │                         │
 │  └──────────┘ └─────────┘ └───────────┘                         │
 └──────────────────────────────────────────────────────────────────┘
 
 [로컬 개발 환경]
 
-  VS Code / Cursor
-  ├── batch_endpoint.py  ← 동일한 코드
-  ├── scripts/batch/     ← 동일한 배치 잡
+  VS Code / Cursor / Claude Code
+  ├── batch_endpoint.py  ← Cloud Run과 동일한 코드
+  ├── scripts/batch/     ← 배치 잡 모듈
   └── python my_job.py --dry-run  ← 로컬 테스트
         │
         └── 수정 → git commit → bash deploy.sh → 끝!
@@ -280,23 +323,23 @@ Code-First로 관리하면?
 | 항목 | Cloud Functions | Cloud Run |
 |------|----------------|-----------|
 | 진입점 | 함수 1개 = 서비스 1개 | **라우트 N개 = 서비스 1개** |
-| 작업 16개 | 서비스 16개 관리 | **서비스 1개로 통합** |
+| 작업 10개 | 서비스 10개 관리 | **서비스 1개로 통합** |
 | 타임아웃 | 최대 540초 (9분) | **최대 3600초 (60분)** |
-| 런타임 | 제한된 환경 | **Docker = 어떤 패키지든 가능** |
+| 런타임 | 제한된 환경 | **Docker = 어떤 패키지든 설치 가능** |
 | 로컬 테스트 | 에뮬레이터 필요 | **Flask 그대로 실행** |
 | 비용 | 호출당 과금 | **동일 (요청당 과금)** |
 
 Cloud Run은 "Docker 컨테이너를 서버리스로 실행"하는 서비스입니다.
 Flask 앱을 Docker에 넣으면, 요청이 올 때만 컨테이너가 실행되고 없으면 꺼집니다.
-Cloud Functions는 함수 1개가 서비스 1개인데, Cloud Run은 라우트 16개가 서비스 1개.
-이 차이가 관리 복잡도를 극적으로 줄여줍니다.
+Cloud Functions는 함수 1개가 서비스 1개인데, Cloud Run은 라우트 N개가 서비스 1개.
+작업이 늘어나도 관리 포인트가 늘어나지 않습니다.
 
 ---
 
-## 자동화 추가가 이렇게 쉽습니다
+## 자동화 추가 전체 과정
 
-새로운 자동화를 추가하는 전체 과정입니다.
-Claude Code를 사용하면 1~3번은 대화 한 번으로 끝납니다.
+새로운 자동화를 추가하는 5단계입니다.
+Claude Code를 사용하면 **1~3단계는 대화 한 번**으로 끝납니다.
 
 ### Step 1: 배치 함수 작성
 
@@ -313,23 +356,17 @@ class ExchangeRateCollector:
 
     async def run(self):
         log.info("환율 데이터 수집 시작")
-
-        # 1. API 호출
         resp = requests.get("https://api.exchangerate.host/latest?base=USD")
         rates = resp.json()["rates"]
-
-        # 2. 필요한 통화만 추출
         target = {k: rates[k] for k in ["KRW", "JPY", "EUR", "CNY"]}
 
-        # 3. BigQuery 저장 (예시)
         if not self.test_mode:
-            self._save_to_bigquery(target)
+            self._save_to_db(target)
 
         return {"collected": len(target), "rates": target}
 
-    def _save_to_bigquery(self, data):
-        # BigQuery 저장 로직
-        pass
+    def _save_to_db(self, data):
+        pass  # BigQuery, Firestore 등에 저장
 ```
 
 ### Step 2: 엔드포인트 등록
@@ -365,32 +402,61 @@ curl -X POST http://localhost:8080/run-exchange-rate
 
 ```bash
 bash scripts/deploy.sh
-# → Cloud Build (~12분) → Cloud Run 배포 → 트래픽 전환
+# → Cloud Build → Cloud Run 배포 → 완료
 ```
 
 ### Step 5: 스케줄러 등록
 
 ```bash
 bash scripts/create_scheduler.sh \
-  stockai-exchange-rate \
+  my-exchange-rate \
   "0 9 * * 1-5" \
   "/run-exchange-rate"
 # → 평일 매일 09:00에 자동 실행!
 ```
 
-**끝.** 이제 매일 아침 9시에 환율이 수집됩니다.
+**끝.** 이제 매일 아침 9시에 환율이 자동 수집됩니다.
+같은 방식으로 라우트를 추가하면 10개, 20개 자동화도 서비스 1개로 관리됩니다.
+
+---
+
+## n8n/Zapier vs Code-First 비교
+
+| 항목 | n8n/Zapier | Code-First + Claude Code |
+|------|-----------|--------------------------|
+| 코드 관리 | UI에서 수동 관리 | **git 버전관리** |
+| 디버깅 | 제한된 UI 로그 | **로컬 실행 + Cloud Logging** |
+| 복잡한 로직 | 노드 조합 한계 (스파게티) | **Python 무제한 자유도** |
+| 비용 | n8n Cloud $24+/월 | **Cloud Run 무료 티어** |
+| 테스트 | 불가능 | **pytest + --dry-run** |
+| AI 연동 | 별도 플러그인 | **Gemini/Claude 직접 호출** |
+| 비밀 관리 | 자체 credential store | **Secret Manager (IAM 기반)** |
+| 패키지 | 제한된 Node 런타임 | **Docker = 뭐든 설치** |
+| 작업 생성 속도 | 드래그&드롭 ~30분 | **Claude Code 대화 ~5분** |
+| 확장성 | 워커/메모리 제한 | **Cloud Run 자동 스케일** |
+
+**n8n이 더 나은 경우:**
+- 비개발자가 간단한 워크플로우를 만들 때
+- Webhook → Slack 알림 같은 2~3 노드 수준의 단순한 연결
+
+**Code-First가 더 나은 경우:**
+- 로직이 조금이라도 복잡해질 때 (조건분기, 반복, 에러처리)
+- 작업 수가 5개 이상일 때
+- AI/ML이 포함된 파이프라인
+- 팀 협업이 필요할 때 (git)
+- 비용을 절감하고 싶을 때
 
 ---
 
 ## 비교 총정리
 
-| 항목 | Console UI | BigQuery 예약 | n8n/Zapier | Terraform | **Code-First (우리)** |
-|------|-----------|-------------|-----------|-----------|---------------------|
+| 항목 | Console UI | BigQuery 예약 | n8n/Zapier | Terraform | **Code-First** |
+|------|-----------|-------------|-----------|-----------|----------------|
 | 학습 곡선 | 낮음 | 낮음 | 중간 | 높음 | **낮음** (Claude Code) |
 | 코드 관리 | 없음 | SQL만 | 없음 | HCL 별도 | **git** |
 | 로컬 테스트 | 불가 | 불가 | 불가 | 불가 | **가능** |
 | 복잡한 로직 | 제한 | SQL만 | 노드 한계 | 가능 | **Python 무제한** |
-| 16개 작업 관리 | 16개 서비스 | 16개 쿼리 | 16개 워크플로우 | 16개 리소스 | **파일 1개** |
+| 작업 N개 관리 | N개 서비스 | N개 쿼리 | N개 워크플로우 | N개 리소스 | **파일 1개** |
 | 배포 | UI 클릭 | 자동 | 자동 | CLI | **CLI 1줄** |
 | 비용/월 | 무료~ | 무료~ | $24+ | 무료~ | **무료~** |
 | AI 연동 | 제한 | 불가 | 플러그인 | 없음 | **직접 호출** |
@@ -423,19 +489,16 @@ gcp-automation-skill/
 
 ### 1. Claude Code 스킬로 등록
 
-프로젝트 루트의 `.claude/commands/` 에 스킬 파일을 복사합니다:
+프로젝트 루트의 `.claude/commands/`에 스킬 파일을 복사합니다:
 
 ```bash
-# 프로젝트 루트에서
 mkdir -p .claude/commands
 cp gcp-automation-skill/commands/gcp-automation.md .claude/commands/
 ```
 
 이후 Claude Code에서 `/gcp-automation`으로 호출할 수 있습니다.
 
-### 2. 템플릿 활용
-
-새 프로젝트를 시작할 때 `templates/` 폴더의 파일을 복사해서 시작합니다:
+### 2. 템플릿으로 프로젝트 시작
 
 ```bash
 cp templates/batch_endpoint.py my-project/
@@ -443,12 +506,11 @@ cp templates/Dockerfile my-project/
 cp templates/batch_job_async.py my-project/scripts/batch/my_job.py
 ```
 
-### 3. 배포 스크립트
+### 3. 배포 스크립트 설정
 
-`scripts/` 폴더의 쉘 스크립트에서 변수 3개만 수정합니다:
+`scripts/` 폴더의 쉘 스크립트에서 변수 3개만 수정:
 
 ```bash
-# scripts/deploy.sh, create_scheduler.sh, logs.sh 공통
 GCP_PROJECT="your-project-id"       # GCP 프로젝트 ID
 SERVICE_NAME="your-batch-service"    # Cloud Run 서비스 이름
 REGION="asia-northeast3"             # 리전
@@ -478,9 +540,9 @@ REGION="asia-northeast3"             # 리전
 
 ### 로컬 도구
 
-- `gcloud` CLI 설치: https://cloud.google.com/sdk/docs/install
+- `gcloud` CLI: https://cloud.google.com/sdk/docs/install
 - Python 3.11+
-- Docker (선택 - Cloud Build 사용 시 불필요)
+- Docker (선택 — Cloud Build 사용 시 불필요)
 
 ---
 
@@ -501,7 +563,10 @@ gcloud run deploy my-service \
 ```
 
 코드에서는 `os.getenv("API_TOKEN")`으로 읽기만 하면 됩니다.
-자동 갱신이 필요한 토큰(OAuth 등)은 `templates/secret_manager_helper.py`를 참조하세요.
+
+**자동 갱신이 필요한 토큰** (OAuth 등):
+- `templates/secret_manager_helper.py`의 `refresh_and_store()` 패턴 참조
+- Cloud Scheduler로 만료 전 주기적 갱신 (예: 매월 1일, 15일)
 
 ---
 
@@ -511,8 +576,9 @@ gcloud run deploy my-service \
 |------|------|------|
 | 504 Timeout | 작업이 스케줄러 deadline 초과 | `--attempt-deadline=900s` 또는 작업 분리 |
 | 첫 요청 실패 | Cold Start (컨테이너 부팅 지연) | `--min-instances=1` (~$15/월) |
-| 429 Rate Limit | Cloud Run 공유 IP | 요청 간 sleep, 대체 API 사용 |
-| 함수 import 에러 | PYTHONPATH 누락 | Dockerfile에 `ENV PYTHONPATH=/app` 확인 |
+| 429 Rate Limit | Cloud Run 공유 IP에서 외부 API 차단 | 요청 간 sleep, 대체 API 사용 |
+| import 에러 | PYTHONPATH 누락 | Dockerfile에 `ENV PYTHONPATH=/app` |
+| 30분+ 작업 타임아웃 | 단일 작업이 너무 오래 걸림 | 작업 분리 (예: KR/US 분리, 청크 처리) |
 
 로그 확인:
 ```bash
@@ -523,19 +589,20 @@ bash scripts/logs.sh search "키워드"  # 검색
 
 ---
 
-## 실전 프로젝트 사례
+## FAQ
 
-이 스킬은 StockAI Platform에서 실제 운영 중인 16개 자동화 파이프라인을 기반으로 만들었습니다:
+**Q: Cloud Run 비용이 걱정됩니다.**
+A: Cloud Run 무료 티어가 상당히 넉넉합니다 (월 200만 요청, 36만 vCPU-초). 배치 작업 수준이면 대부분 무료 범위 안에 들어옵니다. `min-instances=1`을 설정하면 콜드 스타트를 방지하는 대신 ~$15/월 정도 들지만, 없어도 동작합니다 (첫 요청만 느림).
 
-- 30분마다 RSS 뉴스 수집 (28개 피드)
-- Gemini AI 감정분석 자동 실행
-- 주가 데이터 수집 (한국: Naver Finance, 미국: Alpha Vantage)
-- 기술지표 / 재무 데이터 / 수급 데이터 갱신
-- ML 앙상블 모델 (XGBoost + LightGBM + CatBoost) 시그널 생성
-- 시그널 성과 자동 추적 (Triple Barrier)
-- 텔레그램 뉴스 브리핑 자동 발송 (하루 4회)
-- X(트위터) 큐레이션 (하루 3회)
-- Threads 자동 발행 + OAuth 토큰 자동 갱신
+**Q: 작업이 30개, 50개로 늘어나면 어떡하나요?**
+A: `batch_endpoint.py` 1개에 50개 라우트도 문제 없습니다. 다만 Docker 이미지 크기가 커지면 빌드 시간이 늘어나므로, 성격이 다른 작업군(예: 데이터 수집 vs 콘텐츠 발행)은 서비스를 분리하는 것이 좋습니다.
 
-16개 자동화가 batch_endpoint.py **파일 1개**, Cloud Run **서비스 1개**로 운영됩니다.
-월 비용: Cloud Run ~$15 (min-instances=1) + Cloud Scheduler 무료 티어.
+**Q: Flask 대신 FastAPI를 쓸 수 있나요?**
+A: 네. `batch_endpoint.py`를 FastAPI로 작성하고, Dockerfile의 gunicorn 대신 uvicorn을 사용하면 됩니다. 다만 Cloud Scheduler는 단순 HTTP POST만 보내므로 Flask의 간결함이 배치 엔드포인트에 더 적합합니다.
+
+**Q: AWS나 Azure에서도 같은 패턴을 쓸 수 있나요?**
+A: 같은 아이디어를 적용할 수 있습니다.
+- AWS: Flask → Lambda + API Gateway, Scheduler → EventBridge
+- Azure: Flask → Container Apps, Scheduler → Logic Apps Timer
+
+핵심 패턴(Python 함수 → HTTP 엔드포인트 → cron 스케줄러)은 클라우드에 독립적입니다.
