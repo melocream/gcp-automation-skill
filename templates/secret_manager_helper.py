@@ -113,7 +113,7 @@ def create_secret(secret_id: str, project: str) -> bool:
             request={
                 "parent": parent,
                 "secret_id": secret_id,
-                "secret": {"replication": {"automatic": {}}},
+                "secret": {"replication": {"auto": {}}},
             }
         )
 
@@ -144,7 +144,13 @@ def refresh_and_store(
     result = {"refreshed": False, "stored": False, "error": None}
 
     # 1. 갱신
-    new_value = refresh_func()
+    try:
+        new_value = refresh_func()
+    except Exception as e:
+        log.error("refresh_func 실행 실패: %s", e)
+        result["error"] = f"refresh_func raised: {e}"
+        return result
+
     if not new_value:
         result["error"] = "refresh_func returned None"
         return result

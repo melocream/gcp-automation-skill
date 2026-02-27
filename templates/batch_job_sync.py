@@ -12,14 +12,12 @@ batch_endpoint.py 라우트 예시:
   def run_my_job():
       from scripts.my_job import run_job
       result = run_job(dry_run=data.get('dry_run', False))
-      return jsonify(make_response('success', result=result))
+      return jsonify(build_response('success', result=result))
 """
 from __future__ import annotations
 
 import logging
 import time
-
-import requests
 
 log = logging.getLogger(__name__)
 
@@ -90,30 +88,39 @@ def fetch_with_retry(url: str, method: str = "GET", **kwargs) -> dict:
         응답 JSON 딕셔너리
 
     Raises:
-        Exception: 3회 실패 시
+        RuntimeError: 재시도 횟수 초과 시
     """
+    import requests
+
     kwargs.setdefault("timeout", 15)
+    last_error = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = requests.request(method, url, **kwargs)
 
-            # 429 Rate Limit
+            # 429 Rate Limit — 대기 후 재시도 (횟수 소모 안 함)
             if resp.status_code == 429:
                 retry_after = int(resp.headers.get("Retry-After", 60))
-                log.warning("Rate limited (429), %ds 대기 (attempt %d)", retry_after, attempt)
+                log.warning("Rate limited (429), %ds 대기", retry_after)
                 time.sleep(retry_after)
                 continue
 
             resp.raise_for_status()
-            return resp.json()
+
+            # JSON 응답이 아닐 수 있음
+            content_type = resp.headers.get("Content-Type", "")
+            if "application/json" in content_type:
+                return resp.json()
+            return {"text": resp.text, "status_code": resp.status_code}
 
         except requests.exceptions.RequestException as e:
+            last_error = e
             log.warning("요청 실패 (attempt %d/%d): %s", attempt, MAX_RETRIES, e)
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_BACKOFF ** attempt)
 
-    raise Exception(f"요청 실패 ({MAX_RETRIES}회 재시도 후): {url}")
+    raise RuntimeError(f"요청 실패 ({MAX_RETRIES}회 재시도 후): {url}") from last_error
 
 
 # ── CLI 직접 실행 (로컬 테스트용) ───────────────────────

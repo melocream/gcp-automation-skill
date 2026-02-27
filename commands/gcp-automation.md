@@ -71,11 +71,11 @@ def run_my_job():
         result = run_async(job.run(dry_run=data.get('dry_run', False)))
 
         logger.info("My Job 완료: %s", result)
-        return jsonify(make_response('success', result=result))
+        return jsonify(build_response('success', result=result))
     except Exception as e:
         logger.error("My Job 실패: %s", e)
         traceback.print_exc()
-        return jsonify(make_response('error', error=e)), 500
+        return jsonify(build_response('error', error=e)), 500
 ```
 
 **sync 함수 라우트 템플릿:**
@@ -90,11 +90,11 @@ def run_my_job():
         result = do_something(dry_run=data.get('dry_run', False))
 
         logger.info("My Job 완료: %s", result)
-        return jsonify(make_response('success', result=result))
+        return jsonify(build_response('success', result=result))
     except Exception as e:
         logger.error("My Job 실패: %s", e)
         traceback.print_exc()
-        return jsonify(make_response('error', error=e)), 500
+        return jsonify(build_response('error', error=e)), 500
 ```
 
 **체크리스트:**
@@ -152,7 +152,7 @@ $GCLOUD scheduler jobs create http JOB_NAME \
   --http-method=POST \
   --headers="Content-Type=application/json" \
   --body='{}' \
-  --oidc-service-account-email=$GCP_PROJECT@appspot.gserviceaccount.com \
+  --oidc-service-account-email=$SA_EMAIL \  # SA_EMAIL: 서비스 계정 (아래 참고)
   --oidc-token-audience="$SERVICE_URL" \
   --attempt-deadline=900s
 ```
@@ -230,12 +230,13 @@ from google.cloud import bigquery
 
 def ensure_table(project: str, dataset: str, table: str, schema: list[bigquery.SchemaField]):
     """테이블이 없으면 생성, 있으면 스킵."""
+    import google.cloud.exceptions
     client = bigquery.Client(project=project)
     table_ref = f"{project}.{dataset}.{table}"
 
     try:
         client.get_table(table_ref)
-    except Exception:
+    except google.cloud.exceptions.NotFound:
         table_obj = bigquery.Table(table_ref, schema=schema)
         client.create_table(table_obj)
 
@@ -281,11 +282,11 @@ def upsert_to_bigquery(
     client.load_table_from_json(rows, staging_ref, job_config=job_config).result()
 
     # 2. MERGE
-    on_clause = " AND ".join(f"T.{k} = S.{k}" for k in key_columns)
-    update_set = ", ".join(f"T.{c} = S.{c}" for c in update_columns)
+    on_clause = " AND ".join(f"T.`{k}` = S.`{k}`" for k in key_columns)
+    update_set = ", ".join(f"T.`{c}` = S.`{c}`" for c in update_columns)
     all_columns = list(rows[0].keys())
-    insert_cols = ", ".join(all_columns)
-    insert_vals = ", ".join(f"S.{c}" for c in all_columns)
+    insert_cols = ", ".join(f"`{c}`" for c in all_columns)
+    insert_vals = ", ".join(f"S.`{c}`" for c in all_columns)
 
     merge_sql = f"""
     MERGE {target} T

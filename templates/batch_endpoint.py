@@ -17,7 +17,7 @@ import os
 import sys
 import asyncio
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 import logging
 
@@ -44,11 +44,11 @@ def get_test_mode():
     return os.getenv('TEST_MODE', 'false').lower() == 'true'
 
 
-def make_response(status, result=None, error=None, **kwargs):
-    """표준 JSON 응답 포맷."""
+def build_response(status, result=None, error=None, **kwargs):
+    """표준 JSON 응답 포맷. (Flask 내장 make_response와 충돌 방지)"""
     resp = {
         'status': status,
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'test_mode': get_test_mode(),
     }
     if result is not None:
@@ -73,12 +73,12 @@ def run_async(coro):
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify(make_response('healthy'))
+    return jsonify(build_response('healthy'))
 
 
 @app.route('/', methods=['GET'])
 def index():
-    return jsonify(make_response('healthy', endpoints=[
+    return jsonify(build_response('healthy', endpoints=[
         'GET  /health',
         # 여기에 엔드포인트 추가
         # 'POST /run-my-job',
@@ -99,11 +99,11 @@ def index():
 #         result = run_async(job.run(dry_run=data.get('dry_run', False)))
 #
 #         logger.info("My Async Job 완료: %s", result)
-#         return jsonify(make_response('success', result=result))
+#         return jsonify(build_response('success', result=result))
 #     except Exception as e:
 #         logger.error("My Async Job 실패: %s", e)
 #         traceback.print_exc()
-#         return jsonify(make_response('error', error=e)), 500
+#         return jsonify(build_response('error', error=e)), 500
 
 # --- 예시: sync 함수 기반 ---
 # @app.route('/run-my-sync-job', methods=['POST'])
@@ -116,11 +116,11 @@ def index():
 #         result = do_something(dry_run=data.get('dry_run', False))
 #
 #         logger.info("My Sync Job 완료: %s", result)
-#         return jsonify(make_response('success', result=result))
+#         return jsonify(build_response('success', result=result))
 #     except Exception as e:
 #         logger.error("My Sync Job 실패: %s", e)
 #         traceback.print_exc()
-#         return jsonify(make_response('error', error=e)), 500
+#         return jsonify(build_response('error', error=e)), 500
 
 
 # ── 서버 시작 ────────────────────────────────────────────

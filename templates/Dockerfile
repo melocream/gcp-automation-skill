@@ -11,7 +11,7 @@
 
 FROM python:3.11-slim
 
-# 시스템 패키지 (필요 시 추가)
+# 시스템 패키지 (C 컴파일이 필요한 패키지가 없으면 build-essential 제거 가능)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -23,10 +23,14 @@ WORKDIR /app
 # 의존성 설치 (레이어 캐싱)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir flask gunicorn
+    pip install --no-cache-dir flask==3.1.0 gunicorn==23.0.0
 
 # 앱 코드 복사
 COPY . .
+
+# 비-루트 사용자 (보안 권장사항)
+RUN useradd -m appuser
+USER appuser
 
 # Python 경로
 ENV PYTHONPATH=/app

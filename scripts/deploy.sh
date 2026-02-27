@@ -22,6 +22,7 @@ MEMORY="2Gi"
 CPU="2"
 TIMEOUT="900"
 MIN_INSTANCES="1"
+MAX_INSTANCES="${MAX_INSTANCES:-5}"
 
 # ── 빌드 대상 디렉토리 (Dockerfile이 있는 곳) ──────────
 BUILD_DIR="${BUILD_DIR:-.}"
@@ -51,6 +52,8 @@ $GCLOUD run deploy "${SERVICE_NAME}" \
   --cpu="${CPU}" \
   --timeout="${TIMEOUT}" \
   --min-instances="${MIN_INSTANCES}" \
+  --max-instances="${MAX_INSTANCES}" \
+  --no-allow-unauthenticated \
   --quiet
 
 echo "=== Cloud Run 배포 완료 ==="

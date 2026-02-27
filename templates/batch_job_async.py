@@ -13,10 +13,11 @@ batch_endpoint.py 라우트 예시:
       from scripts.batch.my_job import MyJob
       job = MyJob(test_mode=get_test_mode())
       result = run_async(job.run())
-      return jsonify(make_response('success', result=result))
+      return jsonify(build_response('success', result=result))
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 

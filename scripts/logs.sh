@@ -17,38 +17,41 @@ SERVICE_NAME="${SERVICE_NAME:-your-batch-service}"
 REGION="${REGION:-asia-northeast3}"
 GCLOUD="${GCLOUD:-$HOME/google-cloud-sdk/bin/gcloud}"
 
+# Cloud Run은 textPayload(단순 로그)와 jsonPayload(구조화 로그) 둘 다 사용
+LOG_FORMAT="table(timestamp,textPayload,jsonPayload.message)"
+
 MODE="${1:-recent}"
 
 case "$MODE" in
   recent)
-    echo "=== 최근 로그 (30개) ==="
+    echo "=== 최근 로그 (30개, 2시간 이내) ==="
     $GCLOUD logging read \
       "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE_NAME}" \
       --project="${GCP_PROJECT}" \
       --limit=30 \
-      --freshness=30m \
-      --format="table(timestamp,textPayload)"
+      --freshness=2h \
+      --format="${LOG_FORMAT}"
     ;;
 
   errors)
-    echo "=== 에러 로그 (최근 1시간) ==="
+    echo "=== 에러 로그 (최근 2시간) ==="
     $GCLOUD logging read \
       "resource.type=cloud_run_revision AND severity>=ERROR AND resource.labels.service_name=${SERVICE_NAME}" \
       --project="${GCP_PROJECT}" \
       --limit=20 \
-      --freshness=1h \
-      --format="table(timestamp,severity,textPayload)"
+      --freshness=2h \
+      --format="table(timestamp,severity,textPayload,jsonPayload.message)"
     ;;
 
   search)
     KEYWORD="${2:?사용법: $0 search KEYWORD}"
-    echo "=== '${KEYWORD}' 검색 (최근 1시간) ==="
+    echo "=== '${KEYWORD}' 검색 (최근 2시간) ==="
     $GCLOUD logging read \
-      "resource.type=cloud_run_revision AND textPayload:\"${KEYWORD}\" AND resource.labels.service_name=${SERVICE_NAME}" \
+      "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE_NAME} AND (textPayload:\"${KEYWORD}\" OR jsonPayload.message:\"${KEYWORD}\")" \
       --project="${GCP_PROJECT}" \
       --limit=30 \
-      --freshness=1h \
-      --format="table(timestamp,textPayload)"
+      --freshness=2h \
+      --format="${LOG_FORMAT}"
     ;;
 
   scheduler)

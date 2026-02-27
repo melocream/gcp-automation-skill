@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Cloud Scheduler 잡 등록 스크립트
+# Cloud Scheduler 잡 등록 (create-or-update)
 #
 # 사용법:
 #   bash scripts/create_scheduler.sh JOB_NAME "CRON" "/run-endpoint" ['{"key":"val"}']
@@ -24,6 +24,13 @@ SERVICE_NAME="${SERVICE_NAME:-your-batch-service}"
 REGION="${REGION:-asia-northeast3}"
 TIMEZONE="${TIMEZONE:-Asia/Seoul}"
 GCLOUD="${GCLOUD:-$HOME/google-cloud-sdk/bin/gcloud}"
+ATTEMPT_DEADLINE="${ATTEMPT_DEADLINE:-900s}"
+
+# OIDC 서비스 계정 (아래 중 하나 선택)
+#   App Engine 기본: ${GCP_PROJECT}@appspot.gserviceaccount.com
+#   Compute Engine 기본: PROJECT_NUMBER-compute@developer.gserviceaccount.com
+#   전용 계정 (권장): scheduler-sa@${GCP_PROJECT}.iam.gserviceaccount.com
+SA_EMAIL="${SA_EMAIL:-${GCP_PROJECT}@appspot.gserviceaccount.com}"
 
 # ── 인자 파싱 ────────────────────────────────────────────
 JOB_NAME="${1:?사용법: $0 JOB_NAME CRON ENDPOINT [BODY]}"
@@ -43,33 +50,41 @@ if [ -z "$SERVICE_URL" ]; then
   exit 1
 fi
 
-SA_EMAIL="${GCP_PROJECT}@appspot.gserviceaccount.com"
 FULL_URL="${SERVICE_URL}${ENDPOINT}"
 
-# ── 스케줄러 잡 생성 ─────────────────────────────────────
+# ── 스케줄러 잡 생성 (이미 있으면 업데이트) ──────────────
 echo ""
-echo "=== Cloud Scheduler 잡 생성 ==="
+echo "=== Cloud Scheduler 잡 등록 ==="
 echo "  잡 이름: ${JOB_NAME}"
 echo "  cron:    ${CRON} (${TIMEZONE})"
 echo "  URL:     ${FULL_URL}"
 echo "  body:    ${BODY}"
+echo "  deadline: ${ATTEMPT_DEADLINE}"
 echo ""
 
-$GCLOUD scheduler jobs create http "${JOB_NAME}" \
-  --project="${GCP_PROJECT}" \
-  --location="${REGION}" \
-  --schedule="${CRON}" \
-  --time-zone="${TIMEZONE}" \
-  --uri="${FULL_URL}" \
-  --http-method=POST \
-  --headers="Content-Type=application/json" \
-  --body="${BODY}" \
-  --oidc-service-account-email="${SA_EMAIL}" \
-  --oidc-token-audience="${SERVICE_URL}" \
-  --attempt-deadline=900s
+SCHEDULER_ARGS=(
+  --project="${GCP_PROJECT}"
+  --location="${REGION}"
+  --schedule="${CRON}"
+  --time-zone="${TIMEZONE}"
+  --uri="${FULL_URL}"
+  --http-method=POST
+  --headers="Content-Type=application/json"
+  --body="${BODY}"
+  --oidc-service-account-email="${SA_EMAIL}"
+  --oidc-token-audience="${SERVICE_URL}"
+  --attempt-deadline="${ATTEMPT_DEADLINE}"
+)
 
-echo ""
-echo "=== 생성 완료 ==="
+# create 시도 → 이미 존재하면 update
+if $GCLOUD scheduler jobs create http "${JOB_NAME}" "${SCHEDULER_ARGS[@]}" 2>/dev/null; then
+  echo "=== 새 잡 생성 완료 ==="
+else
+  echo "잡이 이미 존재합니다. 업데이트 중..."
+  $GCLOUD scheduler jobs update http "${JOB_NAME}" "${SCHEDULER_ARGS[@]}"
+  echo "=== 기존 잡 업데이트 완료 ==="
+fi
+
 echo ""
 echo "즉시 테스트:"
 echo "  $GCLOUD scheduler jobs run ${JOB_NAME} --project=${GCP_PROJECT} --location=${REGION}"

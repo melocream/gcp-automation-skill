@@ -30,6 +30,7 @@ BigQuery 테이블 관리 + MERGE (Upsert) 헬퍼
 """
 from __future__ import annotations
 
+import datetime
 import logging
 import math
 from typing import Any
@@ -61,6 +62,7 @@ def ensure_table(
         True면 새로 생성됨, False면 이미 존재
     """
     from google.cloud import bigquery
+    import google.cloud.exceptions
 
     client = bigquery.Client(project=project)
     table_ref = f"{project}.{dataset}.{table}"
@@ -69,7 +71,7 @@ def ensure_table(
         client.get_table(table_ref)
         log.info("테이블 이미 존재: %s", table_ref)
         return False
-    except Exception:
+    except google.cloud.exceptions.NotFound:
         bq_schema = [
             bigquery.SchemaField(
                 name=col["name"],
@@ -141,16 +143,16 @@ def upsert(
         # 1. 스테이징 로드
         job_config = bigquery.LoadJobConfig(
             write_disposition="WRITE_TRUNCATE",
-            autodetect=True,
+            autodetect=True,  # 스테이징은 autodetect OK (임시 테이블)
         )
         client.load_table_from_json(chunk, staging_ref, job_config=job_config).result()
 
-        # 2. MERGE
-        on_clause = " AND ".join(f"T.{k} = S.{k}" for k in key_columns)
-        update_set = ", ".join(f"T.{c} = S.{c}" for c in update_columns)
+        # 2. MERGE (컬럼명을 backtick으로 감싸 예약어 충돌 방지)
+        on_clause = " AND ".join(f"T.`{k}` = S.`{k}`" for k in key_columns)
+        update_set = ", ".join(f"T.`{c}` = S.`{c}`" for c in update_columns)
         all_columns = list(chunk[0].keys())
-        insert_cols = ", ".join(all_columns)
-        insert_vals = ", ".join(f"S.{c}" for c in all_columns)
+        insert_cols = ", ".join(f"`{c}`" for c in all_columns)
+        insert_vals = ", ".join(f"S.`{c}`" for c in all_columns)
 
         merge_sql = f"""
         MERGE {target} T
@@ -218,8 +220,10 @@ def run_query(project: str, sql: str, params: dict | None = None) -> list[dict]:
 
     Args:
         project: GCP 프로젝트 ID
-        sql: SQL 쿼리
+        sql: SQL 쿼리 (파라미터는 @name 형식으로 참조)
         params: 쿼리 파라미터 (선택)
+            예: {"start_date": "2026-01-01", "limit": 100}
+            SQL에서 @start_date, @limit 으로 참조
 
     Returns:
         행 딕셔너리 리스트
@@ -227,7 +231,24 @@ def run_query(project: str, sql: str, params: dict | None = None) -> list[dict]:
     from google.cloud import bigquery
 
     client = bigquery.Client(project=project)
-    result = client.query(sql).result()
+
+    job_config = None
+    if params:
+        type_map = {
+            str: "STRING",
+            int: "INT64",
+            float: "FLOAT64",
+            bool: "BOOL",
+        }
+        query_params = []
+        for key, value in params.items():
+            bq_type = type_map.get(type(value), "STRING")
+            query_params.append(
+                bigquery.ScalarQueryParameter(key, bq_type, value)
+            )
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+
+    result = client.query(sql, job_config=job_config).result()
     return [dict(row) for row in result]
 
 
@@ -235,8 +256,6 @@ def run_query(project: str, sql: str, params: dict | None = None) -> list[dict]:
 
 def _clean_row(row: dict) -> dict:
     """NaN/Inf → None 변환, date → str 변환."""
-    import datetime
-
     cleaned = {}
     for k, v in row.items():
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):

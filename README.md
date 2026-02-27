@@ -336,6 +336,208 @@ Cloud Functions는 함수 1개가 서비스 1개인데, Cloud Run은 라우트 N
 
 ---
 
+## Flask + Cloud Scheduler 동작 원리
+
+"Flask가 뭔데?", "Scheduler가 어떻게 코드를 실행시키는 거야?" 에 대한 답입니다.
+
+### 핵심 개념: HTTP로 함수를 호출한다
+
+모든 것은 결국 **HTTP 요청**입니다.
+
+```
+평소 우리가 브라우저에서 하는 것:
+  브라우저 → GET https://google.com → 구글 서버가 HTML 반환
+
+이 스킬이 하는 것:
+  Cloud Scheduler → POST https://my-app.run.app/run-my-job → Flask가 Python 함수 실행 후 JSON 반환
+```
+
+원리는 완전히 같습니다. 다만 브라우저 대신 Cloud Scheduler가, HTML 대신 Python 함수 결과가 오가는 것뿐입니다.
+
+### Flask란?
+
+Flask는 Python으로 HTTP 서버를 만드는 가장 가벼운 프레임워크입니다.
+
+```python
+# ❶ 이게 Flask 앱의 전부입니다
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+# ❷ "이 URL로 요청이 오면, 이 함수를 실행해라"
+@app.route('/hello')
+def hello():
+    return jsonify({"message": "안녕하세요!"})
+
+# ❸ 서버 시작
+app.run(port=8080)
+```
+
+이 코드를 실행하면:
+```bash
+$ python app.py
+ * Running on http://localhost:8080
+
+# 다른 터미널에서:
+$ curl http://localhost:8080/hello
+{"message": "안녕하세요!"}
+```
+
+**`@app.route('/hello')`** — 이것이 Flask의 핵심입니다.
+URL 경로(`/hello`)와 Python 함수(`hello()`)를 연결합니다.
+누군가 `/hello`로 HTTP 요청을 보내면, Flask가 `hello()` 함수를 실행하고 결과를 응답합니다.
+
+### 배치 엔드포인트 = Flask + 비즈니스 로직
+
+우리 `batch_endpoint.py`는 이 원리를 배치 작업에 적용한 것입니다:
+
+```python
+# batch_endpoint.py — 실제 구조 (단순화)
+from flask import Flask, jsonify, request
+app = Flask(__name__)
+
+# ❶ 헬스 체크 (서버가 살아있는지 확인)
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"})
+
+# ❷ 환율 수집 배치
+@app.route('/run-exchange-rate', methods=['POST'])  # POST만 허용
+def run_exchange_rate():
+    from scripts.batch.exchange_rate import ExchangeRateCollector
+    collector = ExchangeRateCollector()
+    result = collector.run()     # ← 여기서 실제 작업 실행
+    return jsonify(result)       # ← 결과를 JSON으로 반환
+
+# ❸ 뉴스 수집 배치
+@app.route('/run-news-ingest', methods=['POST'])
+def run_news_ingest():
+    from scripts.batch.news_ingest import NewsIngestJob
+    job = NewsIngestJob()
+    result = job.run()
+    return jsonify(result)
+
+# ... 라우트를 계속 추가할 수 있음 (10개든 30개든)
+```
+
+### Cloud Scheduler가 하는 일
+
+Cloud Scheduler는 **cron(일정) + HTTP 호출기**입니다.
+등록해놓으면, 정해진 시간에 HTTP POST를 보내줍니다.
+
+```
+설정: "평일 09:00에 POST https://my-app.run.app/run-exchange-rate"
+
+실제 일어나는 일 (매일 09:00):
+
+  ┌──────────────────┐                    ┌──────────────────┐
+  │ Cloud Scheduler   │  HTTP POST         │   Cloud Run       │
+  │                   │ ─────────────────→ │   (Flask 앱)      │
+  │ "09:00이다!"      │                    │                   │
+  │                   │                    │ 1. POST 수신      │
+  │                   │  JSON 응답          │ 2. @app.route 매칭│
+  │                   │ ←───────────────── │ 3. 함수 실행      │
+  │ "200 OK, 성공"    │                    │ 4. 결과 반환      │
+  └──────────────────┘                    └──────────────────┘
+```
+
+### 전체 흐름을 코드로 따라가기
+
+**1단계: Scheduler가 HTTP POST를 보냄**
+```
+POST https://my-app-xyz.a.run.app/run-exchange-rate
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOi...  ← OIDC 토큰 (자동 첨부)
+
+{}  ← body (빈 JSON 또는 파라미터)
+```
+
+**2단계: Cloud Run이 Flask 앱으로 요청 전달**
+```python
+# Flask가 URL 매칭: /run-exchange-rate → run_exchange_rate()
+@app.route('/run-exchange-rate', methods=['POST'])
+def run_exchange_rate():
+    # request.get_json()으로 body 읽기 가능
+    data = request.get_json(silent=True) or {}
+```
+
+**3단계: 비즈니스 로직 실행**
+```python
+    # 실제 작업 수행
+    collector = ExchangeRateCollector()
+    result = collector.run()
+    # result = {"collected": 4, "rates": {"KRW": 1350.5, ...}}
+```
+
+**4단계: JSON 응답 반환**
+```python
+    return jsonify(build_response('success', result=result))
+    # → {"status": "success", "result": {"collected": 4, ...}, "timestamp": "..."}
+```
+
+**5단계: Scheduler가 응답 확인**
+```
+HTTP 200 → "성공" (다음 스케줄까지 대기)
+HTTP 500 → "실패" (설정에 따라 재시도)
+```
+
+### Flask vs 우리가 쓰는 부분
+
+Flask는 거대한 웹 프레임워크이지만, 우리가 배치 서버로 쓸 때 필요한 건 딱 3개뿐입니다:
+
+```python
+from flask import Flask, jsonify, request
+
+Flask    → 앱 객체 만들기, @app.route로 URL 등록
+jsonify  → Python dict를 JSON 응답으로 변환
+request  → 들어온 HTTP 요청의 body/headers 읽기
+```
+
+나머지 Flask 기능(템플릿 렌더링, 세션, 쿠키 등)은 사용하지 않습니다.
+배치 서버에서 Flask는 "URL과 함수를 연결해주는 라우터" 역할만 합니다.
+
+### Gunicorn은 왜 필요한가?
+
+```
+개발 시:  python batch_endpoint.py  → Flask 내장 서버 (1명만 처리 가능)
+배포 시:  gunicorn batch_endpoint:app → 프로덕션 서버 (다중 요청 처리)
+```
+
+Flask 내장 서버는 개발용입니다. 프로덕션에서는 Gunicorn이 Flask 앱을 감싸서
+안정적으로 실행합니다. Dockerfile에서 `gunicorn batch_endpoint:app`이 하는 일:
+
+```
+gunicorn
+  ├── batch_endpoint:app  → "batch_endpoint.py 파일의 app 변수를 실행해라"
+  ├── --workers 1          → 워커 프로세스 1개 (배치는 동시 요청 적음)
+  ├── --threads 8          → 스레드 8개 (I/O 대기 시 활용)
+  └── --timeout 900        → 15분 타임아웃 (배치 작업이 오래 걸릴 수 있음)
+```
+
+### 로컬에서 테스트하는 법
+
+Cloud Run에 배포하기 전에 로컬에서 동일하게 테스트할 수 있습니다:
+
+```bash
+# 터미널 1: Flask 서버 실행
+$ python batch_endpoint.py
+ * Running on http://localhost:8080
+
+# 터미널 2: Scheduler 역할을 curl로 대신
+$ curl -X POST http://localhost:8080/run-exchange-rate
+{"status": "success", "result": {"collected": 4}, "timestamp": "..."}
+
+# body가 필요한 경우
+$ curl -X POST http://localhost:8080/run-my-job \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run": true}'
+```
+
+Cloud Scheduler가 하는 일을 `curl`로 똑같이 재현할 수 있습니다.
+이것이 이 패턴의 가장 큰 장점 — **로컬 = 클라우드, 동일한 코드**.
+
+---
+
 ## 자동화 추가 전체 과정
 
 새로운 자동화를 추가하는 5단계입니다.
@@ -380,11 +582,11 @@ def run_exchange_rate():
         from scripts.batch.exchange_rate import ExchangeRateCollector
         collector = ExchangeRateCollector(test_mode=get_test_mode())
         result = run_async(collector.run())
-        return jsonify(make_response('success', result=result))
+        return jsonify(build_response('success', result=result))
     except Exception as e:
         logger.error("환율 수집 실패: %s", e)
         traceback.print_exc()
-        return jsonify(make_response('error', error=e)), 500
+        return jsonify(build_response('error', error=e)), 500
 ```
 
 ### Step 3: 로컬 테스트
@@ -536,10 +738,12 @@ gcp-automation-skill/
 │   ├── batch_job_sync.py              # sync 배치 잡 템플릿
 │   ├── bigquery_helper.py             # BigQuery 테이블 생성 + MERGE upsert
 │   ├── secret_manager_helper.py       # Secret Manager 유틸리티
-│   └── Dockerfile                     # Cloud Run용 Dockerfile
+│   ├── Dockerfile                     # Cloud Run용 Dockerfile
+│   ├── .dockerignore                  # Docker 빌드 시 제외 파일
+│   └── requirements.txt               # Python 최소 의존성 목록
 └── scripts/
     ├── deploy.sh                      # 빌드+배포 스크립트
-    ├── create_scheduler.sh            # 스케줄러 등록 스크립트
+    ├── create_scheduler.sh            # 스케줄러 등록 (create-or-update)
     └── logs.sh                        # 로그 확인 스크립트
 ```
 
@@ -563,6 +767,8 @@ cp gcp-automation-skill/commands/gcp-automation.md .claude/commands/
 ```bash
 cp templates/batch_endpoint.py my-project/
 cp templates/Dockerfile my-project/
+cp templates/.dockerignore my-project/
+cp templates/requirements.txt my-project/
 cp templates/batch_job_async.py my-project/scripts/batch/my_job.py
 ```
 

@@ -1,9 +1,19 @@
+# Git
+.git/
+.gitignore
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 venv/
 .venv/
 *.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
 
 # 환경/비밀 파일
 .env
@@ -16,6 +26,7 @@ keys/
 .DS_Store
 Thumbs.db
 
-# IDE
-.idea/
-.vscode/
+# 문서/테스트 (배포 이미지에 불필요)
+docs/
+tests/
+*.md
